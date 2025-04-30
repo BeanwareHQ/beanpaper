@@ -42,6 +42,12 @@ local function file_exists(path)
     end
 end
 
+---Executes a command silently.
+---@param cmd string
+local function execute_silent(cmd)
+    os.execute(cmd .. " > /dev/null 2>&1")
+end
+
 ---Resolves a wallpaper path given a prefix.
 ---@param mon Monitor
 ---@param prefix? string
@@ -52,6 +58,41 @@ local function resolve_path(mon, prefix)
         path = prefix .. '/' .. path
     end
     return path
+end
+
+---Gets the path to $XDG_CONFIG_HOME/hypr
+---@return string
+local function get_config_path()
+    local cfgpath = os.getenv("XDG_CONFIG_HOME")
+    if cfgpath == nil then
+        local home = os.getenv("HOME")
+        if home == nil then
+            err("$HOME does not exist")
+        end
+
+        cfgpath = home .. "/.config"
+    end
+
+    return cfgpath .. "/hypr"
+end
+
+---Checks if IPC is enabled.
+---@return boolean
+local function check_ipc()
+    local cfgpath = get_config_path() .. "/hyprpaper.conf"
+
+    local fp = io.open(cfgpath, "r")
+    if fp == nil then
+        err(string.format("failed to open hyprpaper config at %s", cfgpath)); return false
+    end
+
+    for line in fp:lines() do
+        if line == "ipc = true" then
+            return true
+        end
+    end
+
+    return false
 end
 
 ---Generates a string configuration for a monitor table.
@@ -158,18 +199,10 @@ end
 ---Writes a cfg table to disk, at $HOME/hypr/hyprpaper.conf
 ---@param cfg Config
 function M.ApplyDisk(cfg)
-    local cfgpath = os.getenv("XDG_CONFIG_HOME")
-    if cfgpath == nil then
-        local home = os.getenv("HOME")
-        if home == nil then
-            err("$HOME does not exist")
-        end
-
-        cfgpath = home .. "/.config"
-    end
+    local cfgpath = get_config_path()
 
     local path = string.format("%s/hypr/hyprpaper.conf", cfgpath)
-    os.execute(string.format("mkdir -p %s/hypr", cfgpath))
+    execute_silent(string.format("mkdir -p %s/hypr", cfgpath))
 
     local fp, errmsg = io.open(path, "w")
     if fp == nil then
@@ -184,7 +217,7 @@ end
 
 ---Restarts hyprpaper.
 function M.Restart()
-    os.execute("pkill hyprpaper")
+    execute_silent("pkill hyprpaper")
     os.execute("nohup hyprpaper > /dev/null 2>&1 &")
 end
 
@@ -196,20 +229,26 @@ function M.ApplyIPC(cfg)
     for _, mon in ipairs(cfg.monitors) do
         if loaded[mon[2]] == nil then
             local path = resolve_path(mon, cfg.prefix)
-            os.execute("hyprctl hyprpaper preload " .. path)
+            execute_silent("hyprctl hyprpaper preload " .. path)
         end
         local gen = generate_monitor(mon, cfg.prefix)
-        os.execute("hyprctl hyprpaper wallpaper \"" .. gen .. "\"")
+        execute_silent("hyprctl hyprpaper wallpaper \"" .. gen[1] .. "\"")
     end
 
-    os.execute("hyprctl hyprpaper unload all")
+    execute_silent("hyprctl hyprpaper unload all")
 end
 
+---Applies the configuration.
+---@param cfg Config
 function M.Apply(cfg)
-    if not cfg.ipc then
+    local ipc_enabled = check_ipc()
+
+    -- if IPC is not enabled or if it should be enabled
+    if not ipc_enabled or (ipc_enabled and not cfg.ipc) then
         M.ApplyDisk(cfg)
         M.Restart()
     else
+        -- ipc is on and should be on
         M.ApplyIPC(cfg)
     end
 end
