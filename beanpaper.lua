@@ -29,21 +29,10 @@ local function err(txt)
     os.exit(1)
 end
 
----Checks if an item is in a table, and returns the index if found.
----@param table any[]
----@param item any
-local function contains(table, item)
-    for i, v in ipairs(table) do
-        if v == item then
-            return i
-        end
-    end
-end
-
 ---Checks if a file exists at path
 ---@param path string
 ---@return boolean
-local function exists(path)
+local function file_exists(path)
     local fp = io.open(path, "r")
     if fp ~= nil then
         fp:close()
@@ -53,10 +42,22 @@ local function exists(path)
     end
 end
 
+---Resolves a wallpaper path given a prefix.
+---@param mon Monitor
+---@param prefix? string
+local function resolve_path(mon, prefix)
+    local path = mon[2]
+    local useprefix = mon.useprefix or true
+    if prefix ~= nil and useprefix then
+        path = prefix .. '/' .. path
+    end
+    return path
+end
+
 ---Generates a string configuration for a monitor table.
 ---@param mon Monitor
 ---@param prefix? string
----@return table
+---@return string[]
 local function generate_monitor(mon, prefix)
     local output = {}
 
@@ -81,21 +82,33 @@ local function generate_monitor(mon, prefix)
 
     table.insert(output, path)
 
-    local line = string.format("wallpaper = %s,%s", mon[1], table.concat(output, ""))
+    local line = string.format("%s,%s", mon[1], table.concat(output, ""))
     return { line, path }
+end
+
+---Gets loaded wallpapers from hyprctl (loaded items stored as keys)
+---@return table<string, integer>
+local function get_loaded_wallpapers()
+    local handle = io.popen("hyprctl hyprpaper listloaded", "r")
+    if handle == nil then
+        err "failed to query hyprctl for loaded wallpapers"; return {}
+    end
+
+    local res = {}
+    for line in handle:lines() do
+        res[line] = 1
+    end
+
+    return res
 end
 
 ---Validates a configuration before applying
 ---@param cfg Config
 function M.Validate(cfg)
     for _, mon in ipairs(cfg.monitors) do
-        local path = mon[2] -- path
-        local useprefix = mon.useprefix or true
-        if useprefix and cfg.prefix ~= nil then
-            path = cfg.prefix .. "/" .. path
-        end
+        local path = resolve_path(mon, cfg.prefix)
 
-        if not exists(path) then
+        if not file_exists(path) then
             err(string.format("file at %s does not exist", path)); return
         end
     end
@@ -120,7 +133,7 @@ function M.Generate(cfg)
 
     for _, v in ipairs(cfg.monitors) do
         local mon = generate_monitor(v, cfg.prefix)
-        table.insert(wallpapers, mon[1])
+        table.insert(wallpapers, "wallpaper = " .. mon[1])
 
         -- precalculating required wallpapers avoids duplicate preloads
         preload[mon[2]] = 1
@@ -144,7 +157,7 @@ end
 
 ---Writes a cfg table to disk, at $HOME/hypr/hyprpaper.conf
 ---@param cfg Config
-function M.Write(cfg)
+function M.ApplyDisk(cfg)
     local cfgpath = os.getenv("XDG_CONFIG_HOME")
     if cfgpath == nil then
         local home = os.getenv("HOME")
@@ -169,10 +182,36 @@ function M.Write(cfg)
     fp:close()
 end
 
-function M.Apply(cfg)
-    M.Write(cfg)
+---Restarts hyprpaper.
+function M.Restart()
     os.execute("pkill hyprpaper")
     os.execute("nohup hyprpaper > /dev/null 2>&1 &")
+end
+
+---Applies the configuration over IPC.
+---@param cfg Config
+function M.ApplyIPC(cfg)
+    local loaded = get_loaded_wallpapers()
+
+    for _, mon in ipairs(cfg.monitors) do
+        if loaded[mon[2]] == nil then
+            local path = resolve_path(mon, cfg.prefix)
+            os.execute("hyprctl hyprpaper preload " .. path)
+        end
+        local gen = generate_monitor(mon, cfg.prefix)
+        os.execute("hyprctl hyprpaper wallpaper \"" .. gen .. "\"")
+    end
+
+    os.execute("hyprctl hyprpaper unload all")
+end
+
+function M.Apply(cfg)
+    if not cfg.ipc then
+        M.ApplyDisk(cfg)
+        M.Restart()
+    else
+        M.ApplyIPC(cfg)
+    end
 end
 
 return M

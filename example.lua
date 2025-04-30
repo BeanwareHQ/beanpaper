@@ -1,9 +1,9 @@
-local wallpaper = "rasirpiss_day.png"
+local wallpaper = "trees.png"
 
 require("beanpaper").Apply {
     -- ipc = true,
     -- splash = false,
-    prefix = "/home/ezntek/Pictures/wallpapers",
+    prefix = "~/Pictures",
     monitors = {
         -- { "output name", wallpaper, contain = true, tile = false, useprefix = true }
         { "LVDS-1",   wallpaper },
