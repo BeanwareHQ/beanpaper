@@ -12,7 +12,6 @@ local should_log
 ---@class Monitor
 ---@field [1] string (output)
 ---@field [2] string (path)
----@field log? boolean (default = false)
 ---@field contain? boolean (default = false)
 ---@field tile? boolean (default = false)
 ---@field useprefix? boolean (default = true)
@@ -22,6 +21,7 @@ local should_log
 ---@field prefix? string
 ---@field ipc? boolean
 ---@field splash? boolean
+---@field log? boolean (default = false)
 
 ---Pretty-prints an error.
 ---@param txt string
@@ -287,9 +287,9 @@ end
 function M.Apply(cfg)
     local ipc_enabled = check_ipc()
     local cfgipc = cfg.ipc or true
-    local should_apply_disk = not ipc_enabled or (ipc_enabled and not cfgipc)
     should_log = cfg.log or false
 
+    local should_apply_disk = not ipc_enabled or (ipc_enabled and not cfgipc)
     -- if IPC is not enabled or if it should be enabled
     if should_apply_disk then
         M.ApplyDisk(cfg)
