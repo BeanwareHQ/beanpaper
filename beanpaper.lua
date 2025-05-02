@@ -7,10 +7,12 @@
 -- website.
 
 local M = {}
+local should_log
 
 ---@class Monitor
 ---@field [1] string (output)
 ---@field [2] string (path)
+---@field log? boolean (default = false)
 ---@field contain? boolean (default = false)
 ---@field tile? boolean (default = false)
 ---@field useprefix? boolean (default = true)
@@ -24,9 +26,62 @@ local M = {}
 ---Pretty-prints an error.
 ---@param txt string
 local function err(txt)
-    local s = "\27[31;1mERROR: \27[0m" .. txt .. "\n"
+    local s = "\27[31;1m[ERROR] \27[0m" .. txt
     io.stderr:write(s)
     os.exit(1)
+end
+
+---Pretty-prints a warning.
+---@param txt string
+local function warn(txt)
+    local s = "\27[35;1m[WARN] \27[0m\27[2m" .. txt .. "\27[0m"
+    io.stderr:write(s)
+end
+
+---Pretty-prints a log value
+---@param txt string
+local function log(txt)
+    if not should_log then
+        return
+    end
+
+    local s = "\27[36;1m[INFO] \27[0m\27[2m" .. txt .. "\27[0m"
+    io.stderr:write(s)
+end
+
+---Executes a command silently.
+---@param cmd string
+local function execute_silent(cmd)
+    log(string.format("\27[2mexecuted `%s`\27[0m\n", cmd))
+    os.execute(cmd .. " > /dev/null 2>&1")
+end
+
+---Checks if hyprpaper is running.
+---@return boolean
+local function is_hyprpaper_running()
+    local handle = io.popen("pgrep -f 'hyprpaper'")
+    if handle == nil then
+        return false
+    end
+
+    -- for some reason, at least 1 pid is read from pgrep. therefore we count
+    -- if there is >1 line
+    local lines = 0
+    for _ in handle:lines() do
+        lines = lines + 1
+        if lines > 1 then
+            return true
+        end
+    end
+    return false
+end
+
+---Restarts hyprpaper, or starts it if it is not running.
+local function restart_hyprpaper()
+    if is_hyprpaper_running() then
+        execute_silent("pkill hyprpaper")
+    end
+    os.execute("nohup hyprpaper > /dev/null 2>&1 &")
 end
 
 ---Checks if a file exists at path
@@ -40,12 +95,6 @@ local function file_exists(path)
     else
         return false
     end
-end
-
----Executes a command silently.
----@param cmd string
-local function execute_silent(cmd)
-    os.execute(cmd .. " > /dev/null 2>&1")
 end
 
 ---Resolves a wallpaper path given a prefix.
@@ -76,7 +125,7 @@ local function get_config_path()
     return cfgpath .. "/hypr"
 end
 
----Checks if IPC is enabled.
+---Checks if IPC is enabled via the hyprland config on disk.
 ---@return boolean
 local function check_ipc()
     local cfgpath = get_config_path() .. "/hyprpaper.conf"
@@ -106,8 +155,7 @@ local function generate_monitor(mon, prefix)
     local tile = mon.tile or false
 
     if contain and tile then
-        io.stderr:write(string.format("WARN: cannot have both contain and tile for monitor %s. defaulting to cover\n",
-            mon[1]))
+        warn(string.format("cannot have both contain and tile for monitor %s. defaulting to cover", mon[1]))
     elseif contain then
         table.insert(output, "contain:")
     elseif tile then
@@ -215,12 +263,6 @@ function M.ApplyDisk(cfg)
     fp:close()
 end
 
----Restarts hyprpaper.
-function M.Restart()
-    execute_silent("pkill hyprpaper")
-    os.execute("nohup hyprpaper > /dev/null 2>&1 &")
-end
-
 ---Applies the configuration over IPC.
 ---@param cfg Config
 function M.ApplyIPC(cfg)
@@ -230,7 +272,9 @@ function M.ApplyIPC(cfg)
         if loaded[mon[2]] == nil then
             local path = resolve_path(mon, cfg.prefix)
             execute_silent("hyprctl hyprpaper preload " .. path)
+            loaded[mon[2]] = 1 -- mark as loaded
         end
+
         local gen = generate_monitor(mon, cfg.prefix)
         execute_silent("hyprctl hyprpaper wallpaper \"" .. gen[1] .. "\"")
     end
@@ -242,13 +286,22 @@ end
 ---@param cfg Config
 function M.Apply(cfg)
     local ipc_enabled = check_ipc()
+    local cfgipc = cfg.ipc or true
+    local should_apply_disk = not ipc_enabled or (ipc_enabled and not cfgipc)
+    should_log = cfg.log or false
 
     -- if IPC is not enabled or if it should be enabled
-    if not ipc_enabled or (ipc_enabled and not cfg.ipc) then
+    if should_apply_disk then
         M.ApplyDisk(cfg)
-        M.Restart()
+        restart_hyprpaper()
     else
         -- ipc is on and should be on
+        M.ApplyDisk(cfg)
+
+        if not is_hyprpaper_running() then
+            restart_hyprpaper()
+        end
+
         M.ApplyIPC(cfg)
     end
 end
